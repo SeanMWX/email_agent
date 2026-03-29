@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Mapping
 
 
+EMBEDDED_CONFIG_HEADING = "## Embedded SMTP Config"
+
 PROVIDER_PRESETS = {
     "126": {"host": "smtp.126.com", "port": 465, "use_ssl": True},
     "qq": {"host": "smtp.qq.com", "port": 465, "use_ssl": True},
@@ -34,20 +36,93 @@ class SMTPConfig:
     timeout: int
 
 
-def load_dotenv(path: Path) -> dict[str, str]:
-    values: dict[str, str] = {}
-    if not path.exists():
-        return values
+def apply_message_overrides(
+    values: Mapping[str, str],
+    *,
+    to_email: str | None = None,
+    email_subject: str | None = None,
+    email_body: str | None = None,
+) -> dict[str, str]:
+    merged = dict(values)
+    if to_email:
+        merged["TO_EMAIL"] = to_email
+    if email_subject:
+        merged["EMAIL_SUBJECT"] = email_subject
+    if email_body:
+        merged["EMAIL_BODY"] = email_body
+    return merged
 
-    for raw_line in path.read_text(encoding="utf-8-sig").splitlines():
+
+def parse_env_text(text: str, source_name: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
         if "=" not in line:
-            raise ValueError(f"Invalid line in {path}: {raw_line!r}")
+            raise ValueError(f"Invalid line in {source_name}: {raw_line!r}")
         key, value = line.split("=", 1)
         values[key.strip()] = strip_quotes(value.strip())
     return values
+
+
+def load_dotenv(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    return parse_env_text(path.read_text(encoding="utf-8-sig"), str(path))
+
+
+def load_embedded_skill_config(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+
+    lines = path.read_text(encoding="utf-8-sig").splitlines()
+    heading_index = next(
+        (index for index, line in enumerate(lines) if line.strip() == EMBEDDED_CONFIG_HEADING),
+        None,
+    )
+    if heading_index is None:
+        return {}
+
+    fence_start = None
+    for index in range(heading_index + 1, len(lines)):
+        stripped = lines[index].strip()
+        if stripped.startswith("```dotenv") or stripped.startswith("```env") or stripped == "```":
+            fence_start = index + 1
+            break
+        if stripped.startswith("## "):
+            return {}
+
+    if fence_start is None:
+        return {}
+
+    block_lines: list[str] = []
+    for index in range(fence_start, len(lines)):
+        stripped = lines[index].strip()
+        if stripped == "```":
+            break
+        block_lines.append(lines[index])
+    if not block_lines:
+        return {}
+
+    return parse_env_text("\n".join(block_lines), f"{path} embedded config")
+
+
+def load_config_values(env_file: Path, skill_file: Path) -> tuple[dict[str, str], str]:
+    embedded_values = load_embedded_skill_config(skill_file)
+    env_values = load_dotenv(env_file)
+
+    merged = dict(embedded_values)
+    merged.update(env_values)
+
+    sources: list[str] = []
+    if embedded_values:
+        sources.append(f"{skill_file.name} embedded config")
+    if env_values:
+        sources.append(str(env_file))
+
+    source_label = " + ".join(sources) if sources else "no config source"
+    return merged, source_label
 
 
 def strip_quotes(value: str) -> str:
@@ -168,6 +243,10 @@ def redact_secret(value: str) -> str:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Send a simple email through SMTP.")
     parser.add_argument("--env-file", default=".env", help="Path to the .env file")
+    parser.add_argument("--skill-file", default="SKILL.md", help="Path to the SKILL.md file")
+    parser.add_argument("--to-email", help="Recipient email address")
+    parser.add_argument("--email-subject", help="Email subject")
+    parser.add_argument("--email-body", help="Plain-text email body")
     parser.add_argument("--dry-run", action="store_true", help="Print resolved config without sending")
     return parser.parse_args()
 
@@ -175,11 +254,19 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     env_file = Path(args.env_file)
-    values = load_dotenv(env_file)
+    skill_file = Path(args.skill_file)
+    values, source_label = load_config_values(env_file, skill_file)
+    values = apply_message_overrides(
+        values,
+        to_email=args.to_email,
+        email_subject=args.email_subject,
+        email_body=args.email_body,
+    )
     config = build_config(values)
 
     if args.dry_run:
         print("Resolved SMTP config:")
+        print(f"  source      : {source_label}")
         print(f"  provider    : {config.provider}")
         print(f"  host        : {config.host}")
         print(f"  port        : {config.port}")

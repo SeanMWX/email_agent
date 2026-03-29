@@ -1,11 +1,41 @@
 ---
-name: send_smtp_email
+name: email_sender
 description: Send email through SMTP providers such as 126, QQ, Sina, or Aliyun Mail using an SMTP authorization code or mailbox password. Use when the user wants Codex to scaffold SMTP mail sending, configure a `.env` file, or send a simple test email.
 ---
 
 # Send SMTP Email
 
 Use this skill when the task is to send a simple email through SMTP with a mailbox account.
+
+## Embedded SMTP Config
+
+If the runtime environment does not support `.env`, use the following embedded configuration block.
+The sending script can fall back to this block when the env file is missing.
+
+```dotenv
+# Provider preset: 126, qq, sina, aliyun, custom
+EMAIL_PROVIDER=126
+
+# If EMAIL_PROVIDER=custom, fill these yourself.
+SMTP_HOST=smtp.126.com
+SMTP_PORT=465
+
+# true for SMTPS on port 465, false for STARTTLS on port 587.
+SMTP_USE_SSL=true
+
+# Usually the mailbox address.
+SMTP_USERNAME=your_email_username
+
+# 126 / QQ commonly use an SMTP authorization code here.
+# Sina / Aliyun may use the mailbox password depending on account settings.
+SMTP_PASSWORD=your_smtp_secret
+
+FROM_EMAIL=your_email_username
+FROM_NAME=your_name
+
+# Seconds
+SMTP_TIMEOUT=30
+```
 
 ## Trigger Cues
 
@@ -30,10 +60,11 @@ See [references/providers.md](references/providers.md) for preset host and authe
 
 ## Workflow
 
-1. Read `.env` from the repo root. If it does not exist, use `.env.example` as the input contract.
+1. Read `.env` from the repo root. If it does not exist, fall back to the embedded config block in this file.
 2. Resolve provider defaults for `126`, `qq`, `sina`, or `aliyun`. If the provider is not listed, require `SMTP_HOST` and `SMTP_PORT`.
-3. Prefer `scripts/send_email.py --dry-run` first when validating configuration.
-4. Run `scripts/send_email.py` to send the message once the sender, recipient, and secret are confirmed.
+3. Read the message inputs from the user request: recipient, subject, and body.
+4. Prefer `scripts/send_email.py --dry-run` first when validating configuration.
+5. Run `scripts/send_email.py` with runtime message arguments once the sender, recipient, and secret are confirmed.
 
 ## Default Behavior
 
@@ -55,9 +86,9 @@ See [references/providers.md](references/providers.md) for preset host and authe
 - `EMAIL_PROVIDER`
 - `SMTP_PASSWORD`
 - `FROM_EMAIL`
-- `TO_EMAIL`
-- `EMAIL_SUBJECT`
-- `EMAIL_BODY`
+- recipient email
+- subject
+- body
 
 ## Optional Inputs
 
@@ -76,9 +107,6 @@ For preset providers, the minimum practical configuration is:
 EMAIL_PROVIDER=qq
 SMTP_PASSWORD=your_smtp_secret
 FROM_EMAIL=your_email@qq.com
-TO_EMAIL=target@example.com
-EMAIL_SUBJECT=Test email
-EMAIL_BODY=Hello from SMTP
 ```
 
 For `custom`, also set:
@@ -92,19 +120,19 @@ For `custom`, also set:
 Validate config without sending:
 
 ```powershell
-python scripts/send_email.py --dry-run
+python scripts/send_email.py --to-email someone@example.com --email-subject "Test" --email-body "Hello" --dry-run
 ```
 
 Send a real email:
 
 ```powershell
-python scripts/send_email.py
+python scripts/send_email.py --to-email someone@example.com --email-subject "Test" --email-body "Hello"
 ```
 
 Use a different env file:
 
 ```powershell
-python scripts/send_email.py --env-file .tmp-send.env
+python scripts/send_email.py --env-file .tmp-send.env --to-email someone@example.com --email-subject "Test" --email-body "Hello"
 ```
 
 ## Failure Handling
@@ -117,6 +145,7 @@ python scripts/send_email.py --env-file .tmp-send.env
 ## Example Requests
 
 - "Send a test email to `someone@example.com` through QQ SMTP."
+- "给 `xxx@xxx.com` 发一个主题为 `xxx` 内容为 `xxx` 的邮件。"
 - "Set up `.env` for 126 mailbox SMTP."
 - "Why does my SMTP login pass but the server rejects the sender address?"
 
