@@ -10,6 +10,8 @@ from typing import Mapping
 
 
 EMBEDDED_CONFIG_HEADING = "## Embedded SMTP Config"
+SCRIPT_DIR = Path(__file__).resolve().parent
+SKILL_ROOT = SCRIPT_DIR.parent
 
 PROVIDER_PRESETS = {
     "126": {"host": "smtp.126.com", "port": 465, "use_ssl": True},
@@ -66,12 +68,6 @@ def parse_env_text(text: str, source_name: str) -> dict[str, str]:
     return values
 
 
-def load_dotenv(path: Path) -> dict[str, str]:
-    if not path.exists():
-        return {}
-    return parse_env_text(path.read_text(encoding="utf-8-sig"), str(path))
-
-
 def load_embedded_skill_config(path: Path) -> dict[str, str]:
     if not path.exists():
         return {}
@@ -108,21 +104,11 @@ def load_embedded_skill_config(path: Path) -> dict[str, str]:
     return parse_env_text("\n".join(block_lines), f"{path} embedded config")
 
 
-def load_config_values(env_file: Path, skill_file: Path) -> tuple[dict[str, str], str]:
-    embedded_values = load_embedded_skill_config(skill_file)
-    env_values = load_dotenv(env_file)
-
-    merged = dict(embedded_values)
-    merged.update(env_values)
-
-    sources: list[str] = []
-    if embedded_values:
-        sources.append(f"{skill_file.name} embedded config")
-    if env_values:
-        sources.append(str(env_file))
-
-    source_label = " + ".join(sources) if sources else "no config source"
-    return merged, source_label
+def resolve_skill_file(skill_file_arg: str | None) -> Path:
+    if skill_file_arg:
+        skill_file = Path(skill_file_arg)
+        return skill_file if skill_file.is_absolute() else Path.cwd() / skill_file
+    return SKILL_ROOT / "SKILL.md"
 
 
 def strip_quotes(value: str) -> str:
@@ -242,8 +228,7 @@ def redact_secret(value: str) -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Send a simple email through SMTP.")
-    parser.add_argument("--env-file", default=".env", help="Path to the .env file")
-    parser.add_argument("--skill-file", default="SKILL.md", help="Path to the SKILL.md file")
+    parser.add_argument("--skill-file", help="Path to the SKILL.md file")
     parser.add_argument("--to-email", help="Recipient email address")
     parser.add_argument("--email-subject", help="Email subject")
     parser.add_argument("--email-body", help="Plain-text email body")
@@ -253,9 +238,13 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    env_file = Path(args.env_file)
-    skill_file = Path(args.skill_file)
-    values, source_label = load_config_values(env_file, skill_file)
+    skill_file = resolve_skill_file(args.skill_file)
+    values = load_embedded_skill_config(skill_file)
+    if not values:
+        raise ValueError(
+            "No SMTP configuration found in the embedded config block. "
+            f"Checked {skill_file}"
+        )
     values = apply_message_overrides(
         values,
         to_email=args.to_email,
@@ -263,6 +252,7 @@ def main() -> int:
         email_body=args.email_body,
     )
     config = build_config(values)
+    source_label = f"{skill_file.name} embedded config"
 
     if args.dry_run:
         print("Resolved SMTP config:")

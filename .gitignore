@@ -1,6 +1,4 @@
-.env
 __pycache__/
 *.pyc
 skill_creator/
 test/
-.tmp-send-*.env
